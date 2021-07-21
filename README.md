@@ -2,7 +2,7 @@
 
 **<u>[Solidity & Blockchain Vulns](./security/vuln.md)</u>**
 
-**<u>[Decentralized Instagram](./de-instagram/decentragram.md)</u>**
+**<u>[Decentralized Instagram](./De-Instagram/decentragram.md)</u>**
 
 
 
