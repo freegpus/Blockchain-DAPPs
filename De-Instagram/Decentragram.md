@@ -1,3 +1,5 @@
+
+
 # Decentralized Instagram
 
 NOTE: I'm using a 20.04.1-Ubuntu
@@ -42,9 +44,14 @@ NOTE: I'm using a 20.04.1-Ubuntu
   npm install
   ```
 
-  
+
+
+
+### Table of Contents:
 
 [Front End Dev](#Frontend-Web-Client-development)
+
+[End Product](#finished-page)
 
 
 
@@ -488,4 +495,334 @@ App.js will be main file to modify. React is a modern web dev framework that's p
 
 
 
+
+**<u>How IPFS Works:</u>**
+
+```js
+//Declare IPFS
+const ipfsClient = require('ipfs-http-client')
+const ipfs = ipfsClient({ host: 'ipfs.infura.io', port: 5001, protocol: 'https' }) // leaving out the arguments will default to these values
+```
+
+Then adding to IPFS, see the uploadImage component in App.js
+
+
+
+**<u>Final Decentragram.sol</u>**
+
+Make sure to have the smart contract good to go before finishing up the front end and redeploy it using truffle if necessary.
+
+```js
+pragma solidity ^0.5.0;
+
+contract Decentragram {
+  // Code goes here...
+  string public name = "Decentragram";
+
+  //store images
+  uint public imageCount = 0;
+  mapping(uint => Image) public images;
+
+  struct Image {
+    uint id;
+    string hash;
+    string description;
+    uint tipAmount;
+    address payable author;
+  }
+
+
+  event ImageCreated(
+    uint id,
+    string hash,
+    string description,
+    uint tipAmount,
+    address payable author
+  );
+
+   event ImageTipped(
+    uint id,
+    string hash,
+    string description,
+    uint tipAmount,
+    address payable author
+  );
+
+  //create images
+  function uploadImage(string memory _imgHash, string memory _description) public {
+    
+    // Make sure the image hash exists
+    require(bytes(_imgHash).length > 0);
+
+    // Make sure image description exists
+    require(bytes(_description).length > 0);
+
+    // Make sure uploader address exists
+    require(msg.sender!= address(0x0));
+
+    //generate IDs dynamically for the mapping 
+    imageCount++;
+
+    //add image to contract, msg.sender will be the author/person who called the function
+    images[imageCount] = Image(imageCount, _imgHash, _description, 0, msg.sender);
+    
+    // Trigger an event
+    emit ImageCreated(imageCount, _imgHash, _description, 0, msg.sender);
+  }
+
+  //tip images
+  function tipImageOwner(uint _id) public payable {
+      // Make sure the id is valid
+      require(_id > 0 && _id <= imageCount);
+      // Fetch the image from memory inside the function, not on blockchain
+      Image memory _image = images[_id];
+      // Fetch the author
+      address payable _author = _image.author;
+      // Pay the author by sending them Ether
+      address(_author).transfer(msg.value);
+      // Increment the tip amount
+      _image.tipAmount = _image.tipAmount + msg.value;
+      // Update the image
+      images[_id] = _image;
+      // Trigger an event
+      emit ImageTipped(_id, _image.hash, _image.description, _image.tipAmount, _author);
+    }
+
+}
+```
+
+**<u>Final App.js:</u>**
+
+```js
+import Decentragram from '../abis/Decentragram.json'
+import React, { Component } from 'react';
+import Identicon from 'identicon.js';
+import Navbar from './Navbar'
+import Main from './Main'
+import Web3 from 'web3';
+import './App.css';
+
+//Declare IPFS
+const ipfsClient = require('ipfs-http-client')
+const ipfs = ipfsClient({ host: 'ipfs.infura.io', port: 5001, protocol: 'https' }) // leaving out the arguments will default to these values
+
+class App extends Component {
+
+  async componentWillMount() {
+    await this.loadWeb3()
+    await this.loadBlockchainData()
+  }
+
+  async loadWeb3() {
+    if (window.ethereum) {
+      window.web3 = new Web3(window.ethereum)
+      await window.ethereum.enable()
+    }
+    else if (window.web3) {
+      window.web3 = new Web3(window.web3.currentProvider)
+    }
+    else {
+      window.alert('Non-Ethereum browser detected. You should consider trying MetaMask!')
+    }
+  }
+
+  async loadBlockchainData() {
+    const web3 = window.web3
+    // Load account
+    const accounts = await web3.eth.getAccounts()
+    this.setState({ account: accounts[0] })
+    // Network ID
+    const networkId = await web3.eth.net.getId()
+    const networkData = Decentragram.networks[networkId]
+    if(networkData) {
+      const decentragram = new web3.eth.Contract(Decentragram.abi, networkData.address)
+      this.setState({ decentragram })
+      const imagesCount = await decentragram.methods.imageCount().call()
+      this.setState({ imagesCount })
+      // Load images
+      for (var i = 1; i <= imagesCount; i++) {
+        const image = await decentragram.methods.images(i).call()
+        this.setState({
+          images: [...this.state.images, image]
+        })
+      }
+      // Sort images. Show highest tipped images first
+      this.setState({
+        images: this.state.images.sort((a,b) => b.tipAmount - a.tipAmount )
+      })
+      this.setState({ loading: false})
+    } else {
+      window.alert('Decentragram contract not deployed to detected network.')
+    }
+  }
+
+  captureFile = event => {
+
+    event.preventDefault()
+    //read file off html element
+    const file = event.target.files[0]
+    const reader = new window.FileReader()
+    //allows preprocessing of file before uploading to IPFS
+    reader.readAsArrayBuffer(file)
+
+    reader.onloadend = () => {
+      this.setState({ buffer: Buffer(reader.result) })
+      console.log('buffer', this.state.buffer)
+    }
+  }
+
+  uploadImage = description => {
+    console.log("Submitting file to ipfs...")
+
+    //adding file to the IPFS
+    ipfs.add(this.state.buffer, (error, result) => {
+      console.log('Ipfs result', result)
+      if(error) {
+        console.error(error)
+        return
+      }
+
+      this.setState({ loading: true })
+      //call smart contract function from blockchain
+      this.state.decentragram.methods.uploadImage(result[0].hash, description).send({ from: this.state.account }).on('transactionHash', (hash) => {
+        this.setState({ loading: false })
+      })
+    })
+  }
+
+  tipImageOwner(id, tipAmount) {
+    this.setState({ loading: true })
+    this.state.decentragram.methods.tipImageOwner(id).send({ from: this.state.account, value: tipAmount }).on('transactionHash', (hash) => {
+      this.setState({ loading: false })
+    })
+  }
+
+  constructor(props) {
+    super(props)
+    this.state = {
+      account: '',
+      decentragram: null,
+      images: [],
+      loading: true
+    }
+
+    this.uploadImage = this.uploadImage.bind(this)
+    this.tipImageOwner = this.tipImageOwner.bind(this)
+    this.captureFile = this.captureFile.bind(this)
+  }
+
+  render() {
+    return (
+      <div>
+        <Navbar account={this.state.account} />
+        { this.state.loading
+          ? <div id="loader" className="text-center mt-5"><p>Loading...</p></div>
+          : <Main
+              images={this.state.images}
+              captureFile={this.captureFile}
+              uploadImage={this.uploadImage}
+              tipImageOwner={this.tipImageOwner}
+            />
+        }
+      </div>
+    );
+  }
+}
+
+export default App;
+```
+
+**<u>Final Main.js</u>**
+
+```js
+import React, { Component } from 'react';
+import Identicon from 'identicon.js';
+
+class Main extends Component {
+
+  render() {
+    //map function loops over all the images
+    return (
+      <div className="container-fluid mt-5">
+        <div className="row">
+          <main role="main" className="col-lg-12 ml-auto mr-auto" style={{ maxWidth: '500px' }}>
+            <div className="content mr-auto ml-auto">
+              <p>&nbsp;</p>
+              <h2>Share Image</h2>
+              <form onSubmit={(event) => {
+                event.preventDefault()
+                const description = this.imageDescription.value
+                this.props.uploadImage(description)
+              }} >
+                <input type='file' accept=".jpg, .jpeg, .png, .bmp, .gif" onChange={this.props.captureFile} />
+                  <div className="form-group mr-sm-2">
+                    <br></br>
+                      <input
+                        id="imageDescription"
+                        type="text"
+                        ref={(input) => { this.imageDescription = input }}
+                        className="form-control"
+                        placeholder="Image description..."
+                        required />
+                  </div>
+                <button type="submit" class="btn btn-primary btn-block btn-lg">Upload!</button>
+              </form>
+              <p>&nbsp;</p>
+              { this.props.images.map((image, key) => {
+                return(
+                  <div className="card mb-4" key={key} >
+                    <div className="card-header">
+                      <img
+                        className='mr-2'
+                        width='30'
+                        height='30'
+                        src={`data:image/png;base64,${new Identicon(image.author, 30).toString()}`}
+                      />
+                      <small className="text-muted">{image.author}</small>
+                    </div>
+                    <ul id="imageList" className="list-group list-group-flush">
+                      <li className="list-group-item">
+                        <p class="text-center"><img src={`https://ipfs.infura.io/ipfs/${image.hash}`} style={{ maxWidth: '420px'}}/></p>
+                        <p>{image.description}</p>
+                      </li>
+                      <li key={key} className="list-group-item py-2">
+                        <small className="float-left mt-1 text-muted">
+                          TIPS: {window.web3.utils.fromWei(image.tipAmount.toString(), 'Ether')} ETH
+                        </small>
+                        <button
+                          className="btn btn-link btn-sm float-right pt-0"
+                          name={image.id}
+                          onClick={(event) => {
+                            let tipAmount = window.web3.utils.toWei('0.1', 'Ether')
+                            console.log(event.target.name, tipAmount)
+                            this.props.tipImageOwner(event.target.name, tipAmount)
+                          }}
+                        >
+                          TIP 0.1 ETH
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
+                )
+              })}
+            </div>
+          </main>
+        </div>
+      </div>
+    );
+  }
+}
+
+export default Main;
+```
+
+
+
+
+
+### Finished Page
+
+Highest tipped post is first
+
+![final_page](./screenshots/final_page.png)
 
